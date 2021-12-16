@@ -115,6 +115,7 @@ pub enum Goal {
     FilterRules {
         args: TermList,
         applicable_rules: Rules,
+        inapplicable_rules: Rules,
         unfiltered_rules: Rules,
     },
     SortRules {
@@ -516,9 +517,10 @@ impl PolarVirtualMachine {
             Goal::PopQuery { .. } => self.pop_query(),
             Goal::FilterRules {
                 applicable_rules,
+                inapplicable_rules,
                 unfiltered_rules,
                 args,
-            } => self.filter_rules(applicable_rules, unfiltered_rules, args)?,
+            } => self.filter_rules(applicable_rules, inapplicable_rules, unfiltered_rules, args)?,
             Goal::SortRules {
                 rules,
                 outer,
@@ -1585,6 +1587,7 @@ impl PolarVirtualMachine {
                     Goal::TraceStackPush,
                     Goal::FilterRules {
                         applicable_rules: vec![],
+                        inapplicable_rules: vec![],
                         unfiltered_rules: pre_filter,
                         args: predicate.args,
                     },
@@ -2524,14 +2527,63 @@ impl PolarVirtualMachine {
     fn filter_rules(
         &mut self,
         applicable_rules: &Rules,
+        inapplicable_rules: &Rules,
         unfiltered_rules: &Rules,
         args: &TermList,
     ) -> Result<()> {
         if unfiltered_rules.is_empty() {
             // The rules have been filtered. Sort them.
-
             if applicable_rules.is_empty() {
-                self.log_with(LogLevel::Info, || "No matching rules found", &[]);
+                self.log_with(
+                    LogLevel::Info,
+                    || {
+                        format!(
+                            "No matching rules found of {} candidates",
+                            inapplicable_rules.len()
+                        )
+                    },
+                    &[],
+                );
+
+                // if we have performed an exhaustive search of `has_permission`
+                // rules and found none to be applicable
+                if let Some(rule) = inapplicable_rules.get(0) {
+                    if rule.name == sym!("has_permission") {
+                        // lift the action and resource bindings out of the arguments
+                        let resource_blocks = &self.kb.read().unwrap().resource_blocks;
+                        let action_binding =
+                            args.get(1).expect("has_permission rule of unknown arity");
+                        let resource_binding =
+                            args.get(2).expect("has_permission rule of unknown arity");
+
+                        // look up the bound values for action & resource
+                        let bindings = self.bindings(true);
+                        let action = bindings
+                            .get(&action_binding.value().as_symbol().unwrap())
+                            .unwrap();
+                        let resource = bindings
+                            .get(resource_binding.value().as_symbol().unwrap())
+                            .unwrap();
+
+                        // log a DEBUG warning if there is no declaration in the
+                        // resource block matching the action
+                        if resource_blocks
+                            .get_declaration_in_resource_block(action, resource)
+                            .is_err()
+                        {
+                            self.log_with(
+                                LogLevel::Debug,
+                                || {
+                                    format!(
+                                        "action: {} is not a declared permission for resource: {}",
+                                        action, resource
+                                    )
+                                },
+                                &[],
+                            );
+                        }
+                    }
+                }
             }
 
             self.push_goal(Goal::SortRules {
@@ -2545,9 +2597,15 @@ impl PolarVirtualMachine {
             let mut unfiltered_rules = unfiltered_rules.clone();
             let rule = unfiltered_rules.pop().unwrap();
 
+            // create an inapplicable rules set that includes the one being
+            // currently evaluated for our "inapplicable" branch
+            let mut inapplicable_rules_plus_current = inapplicable_rules.clone();
+            inapplicable_rules_plus_current.push(rule.clone());
+
             let inapplicable = Goal::FilterRules {
                 args: args.clone(),
                 applicable_rules: applicable_rules.clone(),
+                inapplicable_rules: inapplicable_rules_plus_current,
                 unfiltered_rules: unfiltered_rules.clone(),
             };
             if rule.params.len() != args.len() {
@@ -2559,6 +2617,7 @@ impl PolarVirtualMachine {
             let applicable = Goal::FilterRules {
                 args: args.clone(),
                 applicable_rules,
+                inapplicable_rules: inapplicable_rules.clone(),
                 unfiltered_rules,
             };
 
