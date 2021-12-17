@@ -2560,63 +2560,45 @@ impl PolarVirtualMachine {
                 // if we have performed an exhaustive search of `has_permission`
                 // rules and found none to be applicable
                 if name == &sym!("has_permission") {
-                    // lift the action and resource bindings out of the arguments
+                    // lift the action bindings out of the arguments
                     let resource_blocks = &self.kb.read().unwrap().resource_blocks;
                     let action_binding = args.get(1).expect("has_permission rule of unknown arity");
-                    let resource_binding =
-                        args.get(2).expect("has_permission rule of unknown arity");
-
-                    // look up the bound values for action & resource
                     let bindings = self.bindings(true);
                     let action = bindings
                         .get(&action_binding.value().as_symbol().unwrap())
                         .unwrap();
-                    let resource = bindings
-                        .get(resource_binding.value().as_symbol().unwrap())
-                        .unwrap();
 
-                    //
-                    let resource_symbol = match resource.value() {
-                        Value::ExternalInstance(ExternalInstance { class_repr, .. }) => {
-                            if let Some(repr) = class_repr {
-                                sym!(repr)
-                            } else {
-                                sym!("None")
-                            }
-                        }
-                        _ => sym!("None"),
-                    };
-
-                    eprintln!("resource: {:?}", resource);
-                    // log a DEBUG warning if there is no declaration in the
+                    // log a DEBUG warning if there is no declaration in any
                     // resource block matching the action
-                    if resource_blocks
-                        .get_declaration_in_resource_block(action, &term!(resource_symbol.clone()))
-                        .is_err()
+                    // TODO @patrickod make this resource-specific once we
+                    // extend ExternalInstance with class_id data allowing us to
+                    // index into the declarations hashmap using the reverse
+                    // map of u64 -> Symbol
+                    if !resource_blocks
+                        .declarations()
+                        .values()
+                        .any(|d| d.contains_key(action))
                     {
                         self.log_with(
                             LogLevel::Debug,
-                            || {
-                                format!(
-                                    "action: {} is not a declared permission for resource: {}",
-                                    action, resource
-                                )
-                            },
+                            || format!("action: {} is not a declared permission", action),
                             &[],
                         );
                     }
 
                     // log a DEBUG warning if there are no shorthand rules for
                     // the resource granting the permission.
-                    if let Some(shorthand_rules) =
-                        resource_blocks.shorthand_rules.get(&term!(resource_symbol))
+                    if !resource_blocks
+                        .shorthand_rules
+                        .values()
+                        .flatten()
+                        .any(|rule| &rule.head == action)
                     {
-                        if !shorthand_rules.iter().any(|rule| &rule.head == action) {
-                            self.log_with(LogLevel::Debug, || "no rule granting action", &[]);
-                        }
-                    } else {
-                        self.log_with(LogLevel::Debug, || "no rule granting action", &[]);
-                        // TODO: @patrickod consider case w/ no shorthand rules
+                        self.log_with(
+                            LogLevel::Debug,
+                            || format!("no shorthand rule granting permission: {}", action),
+                            &[],
+                        );
                     }
                 }
             }
