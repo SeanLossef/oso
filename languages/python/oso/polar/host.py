@@ -100,6 +100,7 @@ class Host:
     def cache_class(
         self,
         cls,
+        id=None,
         name=None,
         fields=None,
         build_query=None,
@@ -114,7 +115,7 @@ class Host:
         self.types[name] = self.types[cls] = UserType(
             name=name,
             cls=cls,
-            id=self.cache_instance(cls),
+            id=self.cache_instance(cls, id=id),
             fields=fields or {},
             build_query=build_query or self.build_query,
             exec_query=exec_query or self.exec_query,

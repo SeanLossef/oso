@@ -253,15 +253,16 @@ class Polar:
             Optional function to merge two queries produced by `build_query`.
         """
         # TODO: let's add example usage here or at least a proper docstring for the arguments
+        class_id = self.register_constant(cls, cls.__name__)
         cls_name = self.host.cache_class(
             cls,
+            id=class_id,
             name=name,
             fields=fields,
             build_query=build_query,
             exec_query=exec_query,
             combine_query=combine_query,
         )
-        self.register_constant(cls, cls_name)
 
     def register_constant(self, value, name):
         """
@@ -272,7 +273,7 @@ class Polar:
         :param name:
             The name under which the constant will be visible in Polar.
         """
-        self.ffi_polar.register_constant(self.host.to_polar(value), name)
+        return self.ffi_polar.register_constant(self.host.to_polar(value), name)
 
     def get_class(self, name):
         """Return class registered for ``name``.
