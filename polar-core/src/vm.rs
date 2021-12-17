@@ -113,6 +113,7 @@ pub enum Goal {
         term: Term,
     },
     FilterRules {
+        name: Symbol,
         args: TermList,
         applicable_rules: Rules,
         inapplicable_rules: Rules,
@@ -519,8 +520,15 @@ impl PolarVirtualMachine {
                 applicable_rules,
                 inapplicable_rules,
                 unfiltered_rules,
+                name,
                 args,
-            } => self.filter_rules(applicable_rules, inapplicable_rules, unfiltered_rules, args)?,
+            } => self.filter_rules(
+                applicable_rules,
+                inapplicable_rules,
+                unfiltered_rules,
+                name,
+                args,
+            )?,
             Goal::SortRules {
                 rules,
                 outer,
@@ -1589,6 +1597,7 @@ impl PolarVirtualMachine {
                         applicable_rules: vec![],
                         inapplicable_rules: vec![],
                         unfiltered_rules: pre_filter,
+                        name: predicate.name,
                         args: predicate.args,
                     },
                     Goal::TraceStackPop,
@@ -2529,10 +2538,13 @@ impl PolarVirtualMachine {
         applicable_rules: &Rules,
         inapplicable_rules: &Rules,
         unfiltered_rules: &Rules,
+        name: &Symbol,
         args: &TermList,
     ) -> Result<()> {
         if unfiltered_rules.is_empty() {
             // The rules have been filtered. Sort them.
+
+            // if we have found no applicable rules
             if applicable_rules.is_empty() {
                 self.log_with(
                     LogLevel::Info,
@@ -2547,45 +2559,69 @@ impl PolarVirtualMachine {
 
                 // if we have performed an exhaustive search of `has_permission`
                 // rules and found none to be applicable
-                if let Some(rule) = inapplicable_rules.get(0) {
-                    if rule.name == sym!("has_permission") {
-                        // lift the action and resource bindings out of the arguments
-                        let resource_blocks = &self.kb.read().unwrap().resource_blocks;
-                        let action_binding =
-                            args.get(1).expect("has_permission rule of unknown arity");
-                        let resource_binding =
-                            args.get(2).expect("has_permission rule of unknown arity");
+                if name == &sym!("has_permission") {
+                    // lift the action and resource bindings out of the arguments
+                    let resource_blocks = &self.kb.read().unwrap().resource_blocks;
+                    let action_binding = args.get(1).expect("has_permission rule of unknown arity");
+                    let resource_binding =
+                        args.get(2).expect("has_permission rule of unknown arity");
 
-                        // look up the bound values for action & resource
-                        let bindings = self.bindings(true);
-                        let action = bindings
-                            .get(&action_binding.value().as_symbol().unwrap())
-                            .unwrap();
-                        let resource = bindings
-                            .get(resource_binding.value().as_symbol().unwrap())
-                            .unwrap();
+                    // look up the bound values for action & resource
+                    let bindings = self.bindings(true);
+                    let action = bindings
+                        .get(&action_binding.value().as_symbol().unwrap())
+                        .unwrap();
+                    let resource = bindings
+                        .get(resource_binding.value().as_symbol().unwrap())
+                        .unwrap();
 
-                        // log a DEBUG warning if there is no declaration in the
-                        // resource block matching the action
-                        if resource_blocks
-                            .get_declaration_in_resource_block(action, resource)
-                            .is_err()
-                        {
-                            self.log_with(
-                                LogLevel::Debug,
-                                || {
-                                    format!(
-                                        "action: {} is not a declared permission for resource: {}",
-                                        action, resource
-                                    )
-                                },
-                                &[],
-                            );
+                    //
+                    let resource_symbol = match resource.value() {
+                        Value::ExternalInstance(ExternalInstance { class_repr, .. }) => {
+                            if let Some(repr) = class_repr {
+                                sym!(repr)
+                            } else {
+                                sym!("None")
+                            }
                         }
+                        _ => sym!("None"),
+                    };
+
+                    eprintln!("resource: {:?}", resource);
+                    // log a DEBUG warning if there is no declaration in the
+                    // resource block matching the action
+                    if resource_blocks
+                        .get_declaration_in_resource_block(action, &term!(resource_symbol.clone()))
+                        .is_err()
+                    {
+                        self.log_with(
+                            LogLevel::Debug,
+                            || {
+                                format!(
+                                    "action: {} is not a declared permission for resource: {}",
+                                    action, resource
+                                )
+                            },
+                            &[],
+                        );
+                    }
+
+                    // log a DEBUG warning if there are no shorthand rules for
+                    // the resource granting the permission.
+                    if let Some(shorthand_rules) =
+                        resource_blocks.shorthand_rules.get(&term!(resource_symbol))
+                    {
+                        if !shorthand_rules.iter().any(|rule| &rule.head == action) {
+                            self.log_with(LogLevel::Debug, || "no rule granting action", &[]);
+                        }
+                    } else {
+                        self.log_with(LogLevel::Debug, || "no rule granting action", &[]);
+                        // TODO: @patrickod consider case w/ no shorthand rules
                     }
                 }
             }
 
+            // proceed to sorting the applicable rules before executing them
             self.push_goal(Goal::SortRules {
                 rules: applicable_rules.iter().rev().cloned().collect(),
                 args: args.clone(),
@@ -2603,6 +2639,7 @@ impl PolarVirtualMachine {
             inapplicable_rules_plus_current.push(rule.clone());
 
             let inapplicable = Goal::FilterRules {
+                name: name.clone(),
                 args: args.clone(),
                 applicable_rules: applicable_rules.clone(),
                 inapplicable_rules: inapplicable_rules_plus_current,
@@ -2615,6 +2652,7 @@ impl PolarVirtualMachine {
             let mut applicable_rules = applicable_rules.clone();
             applicable_rules.push(rule.clone());
             let applicable = Goal::FilterRules {
+                name: name.clone(),
                 args: args.clone(),
                 applicable_rules,
                 inapplicable_rules: inapplicable_rules.clone(),

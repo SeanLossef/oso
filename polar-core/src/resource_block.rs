@@ -320,7 +320,7 @@ impl ResourceBlocks {
     /// Look up `declaration` in `resource` block.
     ///
     /// Invariant: `resource` _must_ exist.
-    fn get_declaration_in_resource_block(
+    pub fn get_declaration_in_resource_block(
         &self,
         declaration: &Term,
         resource_name: &Term,
